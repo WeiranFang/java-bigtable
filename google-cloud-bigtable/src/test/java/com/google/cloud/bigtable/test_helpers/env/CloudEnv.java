@@ -33,9 +33,12 @@ import io.grpc.netty.shaded.io.netty.channel.ChannelDuplexHandler;
 import io.grpc.netty.shaded.io.netty.channel.ChannelFactory;
 import io.grpc.netty.shaded.io.netty.channel.ChannelHandlerContext;
 import io.grpc.netty.shaded.io.netty.channel.ChannelPromise;
+import io.grpc.netty.shaded.io.netty.channel.nio.NioEventLoopGroup;
 import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import javax.annotation.Nullable;
 
@@ -200,6 +203,11 @@ class CloudEnv extends AbstractTestEnv {
         SocketAddress localAddress,
         ChannelPromise promise)
         throws Exception {
+      if (remoteAddress instanceof InetSocketAddress) {
+        InetAddress inetAddress = ((InetSocketAddress) remoteAddress).getAddress();
+        String addr = inetAddress.getHostAddress();
+        System.out.println("-------------- addr: " + addr);
+      }
 
       super.connect(ctx, remoteAddress, localAddress, promise);
     }
@@ -217,7 +225,7 @@ class CloudEnv extends AbstractTestEnv {
 
       NettyChannelBuilder nettyChannelBuilder = (NettyChannelBuilder) delegateChannelBuilder;
       nettyChannelBuilder.channelFactory(new MyChannelFactory());
-      //nettyChannelBuilder.eventLoopGroup(eventLoopGroup);
+      nettyChannelBuilder.eventLoopGroup(new NioEventLoopGroup());
     } catch (NoSuchFieldException | IllegalAccessException e) {
       throw new RuntimeException("Failed to inject the netty ChannelHandler", e);
     }
