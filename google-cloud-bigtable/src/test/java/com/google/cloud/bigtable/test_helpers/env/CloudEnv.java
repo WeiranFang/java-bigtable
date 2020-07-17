@@ -15,6 +15,9 @@
  */
 package com.google.cloud.bigtable.test_helpers.env;
 
+import com.google.api.core.ApiFunction;
+import com.google.api.gax.grpc.InstantiatingGrpcChannelProvider;
+import com.google.api.gax.rpc.TransportChannelProvider;
 import com.google.cloud.bigtable.admin.v2.BigtableInstanceAdminClient;
 import com.google.cloud.bigtable.admin.v2.BigtableInstanceAdminSettings;
 import com.google.cloud.bigtable.admin.v2.BigtableTableAdminClient;
@@ -23,7 +26,17 @@ import com.google.cloud.bigtable.data.v2.BigtableDataClient;
 import com.google.cloud.bigtable.data.v2.BigtableDataSettings;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Strings;
+import io.grpc.ManagedChannelBuilder;
+import io.grpc.alts.ComputeEngineChannelBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.channel.ChannelDuplexHandler;
+import io.grpc.netty.shaded.io.netty.channel.ChannelFactory;
+import io.grpc.netty.shaded.io.netty.channel.ChannelHandlerContext;
+import io.grpc.netty.shaded.io.netty.channel.ChannelPromise;
+import io.grpc.netty.shaded.io.netty.channel.socket.nio.NioSocketChannel;
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.net.SocketAddress;
 import javax.annotation.Nullable;
 
 /**
@@ -79,6 +92,26 @@ class CloudEnv extends AbstractTestEnv {
         BigtableDataSettings.newBuilder().setProjectId(projectId).setInstanceId(instanceId);
     if (!Strings.isNullOrEmpty(dataEndpoint)) {
       dataSettings.stubSettings().setEndpoint(dataEndpoint);
+    }
+
+    if (isDirectPathEnabled()) {
+      TransportChannelProvider channelProvider = dataSettings.stubSettings().getTransportChannelProvider();
+      InstantiatingGrpcChannelProvider defaultTransportProvider = (InstantiatingGrpcChannelProvider) channelProvider;
+      InstantiatingGrpcChannelProvider instrumentedTransportChannelProvider =
+          defaultTransportProvider
+              .toBuilder()
+              .setAttemptDirectPath(true)
+              .setPoolSize(1)
+              .setChannelConfigurator(
+                  new ApiFunction<ManagedChannelBuilder, ManagedChannelBuilder>() {
+                    @Override
+                    public ManagedChannelBuilder apply(ManagedChannelBuilder builder) {
+                      injectNettyChannelHandler(builder);
+                      return builder;
+                    }
+                  })
+              .build();
+      dataSettings.stubSettings().setTransportChannelProvider(instrumentedTransportChannelProvider);
     }
 
     this.tableAdminSettings =
@@ -152,5 +185,51 @@ class CloudEnv extends AbstractTestEnv {
       throw new RuntimeException("Missing system property: " + prop);
     }
     return value;
+  }
+
+  /**
+   * A netty {@link io.grpc.netty.shaded.io.netty.channel.ChannelHandler} that can be instructed to
+   * make IPv6 packets disappear
+   */
+  private class MyChannelHandler extends ChannelDuplexHandler {
+
+    @Override
+    public void connect(
+        ChannelHandlerContext ctx,
+        SocketAddress remoteAddress,
+        SocketAddress localAddress,
+        ChannelPromise promise)
+        throws Exception {
+
+      super.connect(ctx, remoteAddress, localAddress, promise);
+    }
+  }
+
+  private void injectNettyChannelHandler(ManagedChannelBuilder<?> channelBuilder) {
+    try {
+      // Extract the delegate NettyChannelBuilder using reflection
+      Field delegateField = ComputeEngineChannelBuilder.class.getDeclaredField("delegate");
+      delegateField.setAccessible(true);
+
+      ComputeEngineChannelBuilder gceChannelBuilder =
+          ((ComputeEngineChannelBuilder) channelBuilder);
+      Object delegateChannelBuilder = delegateField.get(gceChannelBuilder);
+
+      NettyChannelBuilder nettyChannelBuilder = (NettyChannelBuilder) delegateChannelBuilder;
+      nettyChannelBuilder.channelFactory(new MyChannelFactory());
+      //nettyChannelBuilder.eventLoopGroup(eventLoopGroup);
+    } catch (NoSuchFieldException | IllegalAccessException e) {
+      throw new RuntimeException("Failed to inject the netty ChannelHandler", e);
+    }
+  }
+
+  private class MyChannelFactory implements ChannelFactory<NioSocketChannel> {
+    @Override
+    public NioSocketChannel newChannel() {
+      NioSocketChannel channel = new NioSocketChannel();
+      channel.pipeline().addLast(new MyChannelHandler());
+
+      return channel;
+    }
   }
 }
