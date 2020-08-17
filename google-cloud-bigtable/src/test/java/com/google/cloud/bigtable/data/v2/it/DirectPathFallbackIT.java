@@ -71,11 +71,19 @@ public class DirectPathFallbackIT {
   private static final String DP_IPV6_PREFIX = "2001:4860:8040";
   private static final String DP_IPV4_PREFIX = "34.126";
 
+  // grpcLB DNS names used for DirectPath
+  private static final String GRPCLB_HOST = "grpclb.directpath.google.internal.";
+  private static final String GRPCLB_DUALSTACK_HOST = "grpclb-dualstack.directpath.google.internal.";
+
   @ClassRule public static TestEnvRule testEnvRule = new TestEnvRule();
 
-  private AtomicBoolean blackholeDpAddr = new AtomicBoolean();
-  private AtomicInteger numBlocked = new AtomicInteger();
-  private AtomicInteger numDpAddrRead = new AtomicInteger();
+  private AtomicBoolean blackholeDpLbAddr = new AtomicBoolean();
+  private AtomicInteger numDpLbPacketsDropped = new AtomicInteger();
+  private AtomicInteger numDpLbAddrRead = new AtomicInteger();
+
+  private AtomicBoolean blackholeDpBackendAddr = new AtomicBoolean();
+  private AtomicInteger numDpBackendPacketsDropped = new AtomicInteger();
+  private AtomicInteger numDpBackendAddrRead = new AtomicInteger();
 
   private ChannelFactory<NioSocketChannel> channelFactory;
   private EventLoopGroup eventLoopGroup;
@@ -141,32 +149,57 @@ public class DirectPathFallbackIT {
   }
 
   @Test
-  public void testFallback() throws InterruptedException, TimeoutException {
+  public void testFallbackAtBalancer() throws InterruptedException, TimeoutException {
     // Precondition: wait for DirectPath to connect
     assertWithMessage("Failed to observe RPCs over DirectPath").that(exerciseDirectPath()).isTrue();
 
-    // Enable the blackhole, which will prevent communication with grpclb and thus DirectPath.
-    blackholeDpAddr.set(true);
+    // Enable the blackhole, which will prevent communication with grpclb.
+    blackholeDpLbAddr.set(true);
 
     // Send a request, which should be routed over IPv4 and CFE.
     instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
 
     // Verify that the above check was meaningful, by verifying that the blackhole actually dropped
     // packets.
-    assertWithMessage("Failed to detect any IPv6 traffic in blackhole")
-        .that(numBlocked.get())
+    assertWithMessage("Failed to detect any LB packets got dropped")
+        .that(numDpLbPacketsDropped.get())
         .isGreaterThan(0);
 
     // Make sure that the client will start reading from IPv6 again by sending new requests and
     // checking the injected IPv6 counter has been updated.
-    blackholeDpAddr.set(false);
+    blackholeDpLbAddr.set(false);
+
+    assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
+  }
+
+  @Test
+  public void testFallbackAtBackend() throws InterruptedException, TimeoutException {
+    // Precondition: wait for DirectPath to connect
+    assertWithMessage("Failed to observe RPCs over DirectPath").that(exerciseDirectPath()).isTrue();
+
+    // Enable the blackhole, which will prevent connecting with DirectPath backend addresses.
+    blackholeDpBackendAddr.set(true);
+
+    // Send a request, which should be routed over IPv4 and CFE.
+    instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+
+    // Verify that the above check was meaningful, by verifying that the blackhole actually dropped
+    // packets.
+    assertWithMessage("Failed to detect any DirectPath backend packets got dropped")
+        .that(numDpBackendPacketsDropped.get())
+        .isGreaterThan(0);
+
+    // Make sure that the client will start reading from IPv6 again by sending new requests and
+    // checking the injected IPv6 counter has been updated.
+    blackholeDpBackendAddr.set(false);
 
     assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
 
   private boolean exerciseDirectPath() throws InterruptedException, TimeoutException {
     Stopwatch stopwatch = Stopwatch.createStarted();
-    numDpAddrRead.set(0);
+    numDpLbAddrRead.set(0);
+    numDpBackendAddrRead.set(0);
 
     boolean seenEnough = false;
 
@@ -175,7 +208,7 @@ public class DirectPathFallbackIT {
         instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
       }
       Thread.sleep(100);
-      seenEnough = numDpAddrRead.get() >= MIN_COMPLETE_READ_CALLS;
+      seenEnough = numDpLbAddrRead.get() + numDpBackendAddrRead.get() >= MIN_COMPLETE_READ_CALLS;
     }
     return seenEnough;
   }
@@ -217,10 +250,11 @@ public class DirectPathFallbackIT {
 
   /**
    * A netty {@link io.grpc.netty.shaded.io.netty.channel.ChannelHandler} that can be instructed to
-   * make IPv6 packets disappear
+   * make DirectPath packets disappear
    */
   private class MyChannelHandler extends ChannelDuplexHandler {
-    private boolean isDpAddr;
+    private boolean isDpLbAddr;
+    private boolean isDpBackendAddr;
 
     @Override
     public void connect(
@@ -231,26 +265,37 @@ public class DirectPathFallbackIT {
         throws Exception {
 
       if (remoteAddress instanceof InetSocketAddress) {
-        InetAddress inetAddress = ((InetSocketAddress) remoteAddress).getAddress();
+        InetSocketAddress inetSocketAddress = (InetSocketAddress) remoteAddress;
+        InetAddress inetAddress = inetSocketAddress.getAddress();
         String addr = inetAddress.getHostAddress();
-        isDpAddr = addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX);
+        if (addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX)) {
+          String hostname = inetAddress.getHostName();
+          if (hostname.equals(GRPCLB_HOST) || hostname.equals(GRPCLB_DUALSTACK_HOST)) {
+            isDpLbAddr = true;
+          } else {
+            isDpBackendAddr = true;
+          }
+        }
       }
 
-      if (!(isDpAddr && blackholeDpAddr.get())) {
-        super.connect(ctx, remoteAddress, localAddress, promise);
-      } else {
+      if ((isDpLbAddr && blackholeDpLbAddr.get()) || (isDpBackendAddr && blackholeDpBackendAddr.get())) {
         // Fail the connection fast
         promise.setFailure(new IOException("fake error"));
+      } else {
+        super.connect(ctx, remoteAddress, localAddress, promise);
       }
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-      boolean dropCall = isDpAddr && blackholeDpAddr.get();
-
-      if (dropCall) {
+      boolean dropDpLbCall = isDpLbAddr && blackholeDpLbAddr.get();
+      boolean dropDpBackendCall = isDpBackendAddr && blackholeDpBackendAddr.get();
+      if (dropDpLbCall) {
         // Don't notify the next handler and increment counter
-        numBlocked.incrementAndGet();
+        numDpLbPacketsDropped.incrementAndGet();
+        ReferenceCountUtil.release(msg);
+      } else if (dropDpBackendCall) {
+        numDpBackendPacketsDropped.incrementAndGet();
         ReferenceCountUtil.release(msg);
       } else {
         super.channelRead(ctx, msg);
@@ -259,14 +304,19 @@ public class DirectPathFallbackIT {
 
     @Override
     public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
-      boolean dropCall = isDpAddr && blackholeDpAddr.get();
+      boolean dropDpLbCall = isDpLbAddr && blackholeDpLbAddr.get();
+      boolean dropDpBackendCall = isDpBackendAddr && blackholeDpBackendAddr.get();
 
-      if (dropCall) {
+      if (dropDpLbCall) {
         // Don't notify the next handler and increment counter
-        numBlocked.incrementAndGet();
+        numDpLbPacketsDropped.incrementAndGet();
+      } else if (dropDpBackendCall) {
+        numDpBackendPacketsDropped.incrementAndGet();
       } else {
-        if (isDpAddr) {
-          numDpAddrRead.incrementAndGet();
+        if (isDpLbAddr) {
+          numDpLbAddrRead.incrementAndGet();
+        } else if (isDpBackendAddr) {
+          numDpBackendAddrRead.incrementAndGet();
         }
         super.channelReadComplete(ctx);
       }
