@@ -77,17 +77,22 @@ public class DirectPathFallbackIT {
 
   @ClassRule public static TestEnvRule testEnvRule = new TestEnvRule();
 
-  private AtomicBoolean blackholeDpLbAddr = new AtomicBoolean();
-  private AtomicInteger numDpLbPacketsDropped = new AtomicInteger();
-  private AtomicInteger numDpLbAddrRead = new AtomicInteger();
+  private AtomicBoolean failDpLbConnection = new AtomicBoolean();
+  private AtomicInteger numDpLbConnectionFailed = new AtomicInteger();
+  //private AtomicInteger numDpLbAddrRead = new AtomicInteger();
 
-  private AtomicBoolean blackholeDpBackendAddr = new AtomicBoolean();
-  private AtomicInteger numDpBackendPacketsDropped = new AtomicInteger();
-  private AtomicInteger numDpBackendAddrRead = new AtomicInteger();
+  private AtomicBoolean failDpBackendConnection = new AtomicBoolean();
+  private AtomicInteger numDpBackendConnectionFailed = new AtomicInteger();
+  //private AtomicInteger numDpBackendAddrRead = new AtomicInteger();
+
+  private AtomicBoolean dropDpCalls = new AtomicBoolean();
+  private AtomicInteger numDpCallsBlocked = new AtomicInteger();
+  private AtomicInteger numDpCallsRead = new AtomicInteger();
 
   private ChannelFactory<NioSocketChannel> channelFactory;
   private EventLoopGroup eventLoopGroup;
-  private BigtableDataClient instrumentedClient;
+  private BigtableDataSettings bigtableDataSettings;
+  //private BigtableDataClient instrumentedClient;
 
   public DirectPathFallbackIT() {
     // Create a transport channel provider that can intercept ipv6 packets.
@@ -135,80 +140,111 @@ public class DirectPathFallbackIT {
         // Forcefully ignore GOOGLE_APPLICATION_CREDENTIALS
         .setCredentialsProvider(FixedCredentialsProvider.create(ComputeEngineCredentials.create()));
 
-    instrumentedClient = BigtableDataClient.create(settingsBuilder.build());
+    bigtableDataSettings = settingsBuilder.build();
+    //instrumentedClient = BigtableDataClient.create(settingsBuilder.build());
   }
 
   @After
   public void teardown() {
-    if (instrumentedClient != null) {
-      instrumentedClient.close();
-    }
+    //if (instrumentedClient != null) {
+    //  instrumentedClient.close();
+    //}
     if (eventLoopGroup != null) {
       eventLoopGroup.shutdownGracefully();
     }
   }
 
   @Test
-  public void testFallbackAtBalancer() throws InterruptedException, TimeoutException {
-    // Precondition: wait for DirectPath to connect
-    assertWithMessage("Failed to observe RPCs over DirectPath").that(exerciseDirectPath()).isTrue();
+  public void testFallbackOnOpenChannel() throws InterruptedException, TimeoutException, IOException {
+    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
+      // Precondition: wait for DirectPath to connect
+      assertWithMessage("Failed to observe RPCs over DirectPath").that(exerciseDirectPath(client))
+          .isTrue();
 
-    // Enable the blackhole, which will prevent communication with grpclb.
-    blackholeDpLbAddr.set(true);
+      // Drop any future DirectPath calls on existing channel.
+      dropDpCalls.set(true);
 
-    // Send a request, which should be routed over IPv4 and CFE.
-    instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+      // New requests should be routed over IPv4 and CFE.
+      client.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
 
-    // Verify that the above check was meaningful, by verifying that the blackhole actually dropped
-    // packets.
-    assertWithMessage("Failed to detect any LB packets got dropped")
-        .that(numDpLbPacketsDropped.get())
-        .isGreaterThan(0);
+      // Verify that the above check was meaningful, by verifying that the blackhole actually dropped
+      // packets.
+      assertWithMessage("Failed to detect any DirectPath packets in blackhole")
+          .that(numDpCallsBlocked.get())
+          .isGreaterThan(0);
 
-    // Make sure that the client will start reading from IPv6 again by sending new requests and
-    // checking the injected IPv6 counter has been updated.
-    blackholeDpLbAddr.set(false);
+      // Make sure that the client will start reading from DirectPath again by sending new requests
+      // and checking the injected DirectPath counter has been updated.
+      dropDpCalls.set(false);
 
-    assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
+      assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath(client)).isTrue();
+    }
   }
 
   @Test
-  public void testFallbackAtBackend() throws InterruptedException, TimeoutException {
-    // Precondition: wait for DirectPath to connect
-    assertWithMessage("Failed to observe RPCs over DirectPath").that(exerciseDirectPath()).isTrue();
+  public void testFallbackAtBalancerConnection()
+      throws InterruptedException, TimeoutException, IOException {
+    // Set connections to DirectPath grpcLB to fail.
+    failDpLbConnection.set(true);
 
-    // Enable the blackhole, which will prevent connecting with DirectPath backend addresses.
-    blackholeDpBackendAddr.set(true);
+    // New connections should fallback to use IPv4 and CFE.
+    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
+      client.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
 
-    // Send a request, which should be routed over IPv4 and CFE.
-    instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+      // Verify that the above check was meaningful, by verifying that the grpcLB connection
+      // actually failed.
+      assertWithMessage("Failed to detect any LB packets got dropped")
+          .that(numDpLbConnectionFailed.get())
+          .isGreaterThan(0);
+    }
 
-    // Verify that the above check was meaningful, by verifying that the blackhole actually dropped
-    // packets.
-    assertWithMessage("Failed to detect any DirectPath backend packets got dropped")
-        .that(numDpBackendPacketsDropped.get())
-        .isGreaterThan(0);
+    // Make sure that new connections will use DirectPath again by creating new client with read
+    // request and checking the injected DirectPath counter has been updated.
+    failDpLbConnection.set(false);
 
-    // Make sure that the client will start reading from IPv6 again by sending new requests and
-    // checking the injected IPv6 counter has been updated.
-    blackholeDpBackendAddr.set(false);
-
-    assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
+    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
+      assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath(client)).isTrue();
+    }
   }
 
-  private boolean exerciseDirectPath() throws InterruptedException, TimeoutException {
+  @Test
+  public void testFallbackAtBackendConnection()
+      throws InterruptedException, TimeoutException, IOException {
+    // Set connections to DirectPath backend to fail.
+    failDpBackendConnection.set(true);
+
+    // New connections should fallback to use IPv4 and CFE.
+    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
+      client.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+
+      // Verify that the above check was meaningful, by verifying that the grpcLB connection
+      // actually failed.
+      assertWithMessage("Failed to detect any LB packets got dropped")
+          .that(numDpBackendConnectionFailed.get())
+          .isGreaterThan(0);
+    }
+
+    // Make sure that new connections will use DirectPath again by creating new client with read
+    // request and checking the injected DirectPath counter has been updated.
+    failDpBackendConnection.set(false);
+
+    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
+      assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath(client)).isTrue();
+    }
+  }
+
+  private boolean exerciseDirectPath(BigtableDataClient bigtableDataClient) throws InterruptedException, TimeoutException {
     Stopwatch stopwatch = Stopwatch.createStarted();
-    numDpLbAddrRead.set(0);
-    numDpBackendAddrRead.set(0);
+    numDpCallsRead.set(0);
 
     boolean seenEnough = false;
 
     while (!seenEnough && stopwatch.elapsed(TimeUnit.MINUTES) < 2) {
       for (int i = 0; i < NUM_RPCS_TO_SEND; i++) {
-        instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+        bigtableDataClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
       }
       Thread.sleep(100);
-      seenEnough = numDpLbAddrRead.get() + numDpBackendAddrRead.get() >= MIN_COMPLETE_READ_CALLS;
+      seenEnough = numDpCallsRead.get() >= MIN_COMPLETE_READ_CALLS;
     }
     return seenEnough;
   }
@@ -253,6 +289,7 @@ public class DirectPathFallbackIT {
    * make DirectPath packets disappear
    */
   private class MyChannelHandler extends ChannelDuplexHandler {
+    private boolean isDpAddr;
     private boolean isDpLbAddr;
     private boolean isDpBackendAddr;
 
@@ -268,7 +305,8 @@ public class DirectPathFallbackIT {
         InetSocketAddress inetSocketAddress = (InetSocketAddress) remoteAddress;
         InetAddress inetAddress = inetSocketAddress.getAddress();
         String addr = inetAddress.getHostAddress();
-        if (addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX)) {
+        isDpAddr = addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX);
+        if (isDpAddr) {
           String hostname = inetAddress.getHostName();
           if (hostname.equals(GRPCLB_HOST) || hostname.equals(GRPCLB_DUALSTACK_HOST)) {
             isDpLbAddr = true;
@@ -278,8 +316,17 @@ public class DirectPathFallbackIT {
         }
       }
 
-      if ((isDpLbAddr && blackholeDpLbAddr.get()) || (isDpBackendAddr && blackholeDpBackendAddr.get())) {
+      boolean failConnection = (isDpLbAddr && failDpLbConnection.get())
+          || (isDpBackendAddr && failDpBackendConnection.get());
+
+      if (failConnection) {
         // Fail the connection fast
+        if (isDpLbAddr) {
+          numDpLbConnectionFailed.incrementAndGet();
+        }
+        if (isDpBackendAddr) {
+          numDpBackendConnectionFailed.incrementAndGet();
+        }
         promise.setFailure(new IOException("fake error"));
       } else {
         super.connect(ctx, remoteAddress, localAddress, promise);
@@ -288,14 +335,10 @@ public class DirectPathFallbackIT {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-      boolean dropDpLbCall = isDpLbAddr && blackholeDpLbAddr.get();
-      boolean dropDpBackendCall = isDpBackendAddr && blackholeDpBackendAddr.get();
-      if (dropDpLbCall) {
+      boolean dropCall = isDpAddr && dropDpCalls.get();
+      if (dropCall) {
         // Don't notify the next handler and increment counter
-        numDpLbPacketsDropped.incrementAndGet();
-        ReferenceCountUtil.release(msg);
-      } else if (dropDpBackendCall) {
-        numDpBackendPacketsDropped.incrementAndGet();
+        numDpCallsBlocked.incrementAndGet();
         ReferenceCountUtil.release(msg);
       } else {
         super.channelRead(ctx, msg);
@@ -304,19 +347,14 @@ public class DirectPathFallbackIT {
 
     @Override
     public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
-      boolean dropDpLbCall = isDpLbAddr && blackholeDpLbAddr.get();
-      boolean dropDpBackendCall = isDpBackendAddr && blackholeDpBackendAddr.get();
+      boolean dropCall = isDpAddr && dropDpCalls.get();
 
-      if (dropDpLbCall) {
+      if (dropCall) {
         // Don't notify the next handler and increment counter
-        numDpLbPacketsDropped.incrementAndGet();
-      } else if (dropDpBackendCall) {
-        numDpBackendPacketsDropped.incrementAndGet();
+        numDpCallsBlocked.incrementAndGet();
       } else {
-        if (isDpLbAddr) {
-          numDpLbAddrRead.incrementAndGet();
-        } else if (isDpBackendAddr) {
-          numDpBackendAddrRead.incrementAndGet();
+        if (isDpAddr) {
+          numDpCallsRead.incrementAndGet();
         }
         super.channelReadComplete(ctx);
       }
