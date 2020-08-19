@@ -91,8 +91,8 @@ public class DirectPathFallbackIT {
 
   private ChannelFactory<NioSocketChannel> channelFactory;
   private EventLoopGroup eventLoopGroup;
-  private BigtableDataSettings bigtableDataSettings;
-  //private BigtableDataClient instrumentedClient;
+  //private BigtableDataSettings bigtableDataSettings;
+  private BigtableDataClient instrumentedClient;
 
   public DirectPathFallbackIT() {
     // Create a transport channel provider that can intercept ipv6 packets.
@@ -140,15 +140,15 @@ public class DirectPathFallbackIT {
         // Forcefully ignore GOOGLE_APPLICATION_CREDENTIALS
         .setCredentialsProvider(FixedCredentialsProvider.create(ComputeEngineCredentials.create()));
 
-    bigtableDataSettings = settingsBuilder.build();
-    //instrumentedClient = BigtableDataClient.create(settingsBuilder.build());
+    //bigtableDataSettings = settingsBuilder.build();
+    instrumentedClient = BigtableDataClient.create(settingsBuilder.build());
   }
 
   @After
   public void teardown() {
-    //if (instrumentedClient != null) {
-    //  instrumentedClient.close();
-    //}
+    if (instrumentedClient != null) {
+      instrumentedClient.close();
+    }
     if (eventLoopGroup != null) {
       eventLoopGroup.shutdownGracefully();
     }
@@ -156,29 +156,27 @@ public class DirectPathFallbackIT {
 
   @Test
   public void testFallbackOnOpenChannel() throws InterruptedException, TimeoutException, IOException {
-    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
-      // Precondition: wait for DirectPath to connect
-      assertWithMessage("Failed to observe RPCs over DirectPath").that(exerciseDirectPath(client))
-          .isTrue();
+    // Precondition: wait for DirectPath to connect
+    assertWithMessage("Failed to observe RPCs over DirectPath").that(exerciseDirectPath())
+        .isTrue();
 
-      // Drop any future DirectPath calls on existing channel.
-      dropDpCalls.set(true);
+    // Drop any future DirectPath calls on existing channel.
+    dropDpCalls.set(true);
 
-      // New requests should be routed over IPv4 and CFE.
-      client.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+    // New requests should be routed over IPv4 and CFE.
+    instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
 
-      // Verify that the above check was meaningful, by verifying that the blackhole actually dropped
-      // packets.
-      assertWithMessage("Failed to detect any DirectPath packets in blackhole")
-          .that(numDpCallsBlocked.get())
-          .isGreaterThan(0);
+    // Verify that the above check was meaningful, by verifying that the blackhole actually dropped
+    // packets.
+    assertWithMessage("Failed to detect any DirectPath packets in blackhole")
+        .that(numDpCallsBlocked.get())
+        .isGreaterThan(0);
 
-      // Make sure that the client will start reading from DirectPath again by sending new requests
-      // and checking the injected DirectPath counter has been updated.
-      dropDpCalls.set(false);
+    // Make sure that the client will start reading from DirectPath again by sending new requests
+    // and checking the injected DirectPath counter has been updated.
+    dropDpCalls.set(false);
 
-      assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath(client)).isTrue();
-    }
+    assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
 
   @Test
@@ -188,23 +186,19 @@ public class DirectPathFallbackIT {
     failDpLbConnection.set(true);
 
     // New connections should fallback to use IPv4 and CFE.
-    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
-      client.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+    instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
 
-      // Verify that the above check was meaningful, by verifying that the grpcLB connection
-      // actually failed.
-      assertWithMessage("Failed to detect any LB packets got dropped")
-          .that(numDpLbConnectionFailed.get())
-          .isGreaterThan(0);
-    }
+    // Verify that the above check was meaningful, by verifying that the grpcLB connection
+    // actually failed.
+    assertWithMessage("Failed to detect any LB packets got dropped")
+        .that(numDpLbConnectionFailed.get())
+        .isGreaterThan(0);
 
     // Make sure that new connections will use DirectPath again by creating new client with read
     // request and checking the injected DirectPath counter has been updated.
     failDpLbConnection.set(false);
 
-    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
-      assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath(client)).isTrue();
-    }
+    //assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
 
   @Test
@@ -214,26 +208,22 @@ public class DirectPathFallbackIT {
     failDpBackendConnection.set(true);
 
     // New connections should fallback to use IPv4 and CFE.
-    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
-      client.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+    instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
 
-      // Verify that the above check was meaningful, by verifying that the grpcLB connection
-      // actually failed.
-      assertWithMessage("Failed to detect any LB packets got dropped")
-          .that(numDpBackendConnectionFailed.get())
-          .isGreaterThan(0);
-    }
+    // Verify that the above check was meaningful, by verifying that the grpcLB connection
+    // actually failed.
+    assertWithMessage("Failed to detect any LB packets got dropped")
+        .that(numDpBackendConnectionFailed.get())
+        .isGreaterThan(0);
 
     // Make sure that new connections will use DirectPath again by creating new client with read
     // request and checking the injected DirectPath counter has been updated.
     failDpBackendConnection.set(false);
 
-    try (BigtableDataClient client = BigtableDataClient.create(bigtableDataSettings)) {
-      assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath(client)).isTrue();
-    }
+    //assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
 
-  private boolean exerciseDirectPath(BigtableDataClient bigtableDataClient) throws InterruptedException, TimeoutException {
+  private boolean exerciseDirectPath() throws InterruptedException, TimeoutException {
     Stopwatch stopwatch = Stopwatch.createStarted();
     numDpCallsRead.set(0);
 
@@ -241,7 +231,7 @@ public class DirectPathFallbackIT {
 
     while (!seenEnough && stopwatch.elapsed(TimeUnit.MINUTES) < 2) {
       for (int i = 0; i < NUM_RPCS_TO_SEND; i++) {
-        bigtableDataClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
+        instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
       }
       Thread.sleep(100);
       seenEnough = numDpCallsRead.get() >= MIN_COMPLETE_READ_CALLS;
