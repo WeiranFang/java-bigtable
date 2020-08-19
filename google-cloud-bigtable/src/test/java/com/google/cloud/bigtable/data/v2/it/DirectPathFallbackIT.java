@@ -49,6 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.ClassRule;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -154,6 +155,7 @@ public class DirectPathFallbackIT {
     }
   }
 
+  @Ignore
   @Test
   public void testFallbackOnOpenChannel() throws InterruptedException, TimeoutException, IOException {
     // Precondition: wait for DirectPath to connect
@@ -171,7 +173,7 @@ public class DirectPathFallbackIT {
     // Verify that the above check was meaningful, by verifying that the blackhole actually dropped
     // packets.
     assertWithMessage("Failed to detect any DirectPath packets in blackhole")
-        .that(numDpCallsBlocked.get())
+        .that(numDpLbCallsBlocked.get() + numDpBackendCallsBlocked.get())
         .isGreaterThan(0);
 
     // Make sure that the client will start reading from DirectPath again by sending new requests
@@ -183,6 +185,7 @@ public class DirectPathFallbackIT {
     assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
 
+  @Ignore
   @Test
   public void testFallbackAtBalancerConnection()
       throws InterruptedException, TimeoutException, IOException {
@@ -202,7 +205,7 @@ public class DirectPathFallbackIT {
     // request and checking the injected DirectPath counter has been updated.
     dropDpLbCalls.set(false);
 
-    //assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
+    assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
 
   @Test
@@ -287,6 +290,8 @@ public class DirectPathFallbackIT {
     private boolean isDpLbAddr;
     private boolean isDpBackendAddr;
 
+    private SocketAddress remoteAddress;
+
     @Override
     public void connect(
         ChannelHandlerContext ctx,
@@ -294,6 +299,7 @@ public class DirectPathFallbackIT {
         SocketAddress localAddress,
         ChannelPromise promise)
         throws Exception {
+      this.remoteAddress = remoteAddress;
 
       if (remoteAddress instanceof InetSocketAddress) {
         InetSocketAddress inetSocketAddress = (InetSocketAddress) remoteAddress;
@@ -325,7 +331,12 @@ public class DirectPathFallbackIT {
       //} else {
       //  super.connect(ctx, remoteAddress, localAddress, promise);
       //}
-      super.connect(ctx, remoteAddress, localAddress, promise);
+      if (isDpBackendAddr && dropDpBackendCalls.get()) {
+	System.out.println("===== fail connection: " + this.remoteAddress);
+        promise.setFailure(new IOException("fake error"));
+      } else {
+	super.connect(ctx, remoteAddress, localAddress, promise);
+      }
     }
 
     @Override
@@ -334,13 +345,16 @@ public class DirectPathFallbackIT {
       boolean dropDpBackendCall = isDpBackendAddr && dropDpBackendCalls.get();
       //boolean dropCall = isDpAddr && dropDpCalls.get();
       if (dropDpLbCall) {
+	System.out.println("===== drop channelRead: " + this.remoteAddress);
         // Don't notify the next handler and increment counter
         numDpLbCallsBlocked.incrementAndGet();
         ReferenceCountUtil.release(msg);
       } else if (dropDpBackendCall) {
+	System.out.println("===== drop channelRead: " + this.remoteAddress);
         numDpBackendCallsBlocked.incrementAndGet();
         ReferenceCountUtil.release(msg);
       } else {
+	System.out.println("===== pass channelRead: " + this.remoteAddress);
         super.channelRead(ctx, msg);
       }
     }
@@ -352,11 +366,14 @@ public class DirectPathFallbackIT {
       //boolean dropCall = isDpAddr && dropDpCalls.get();
 
       if (dropDpLbCall) {
+	System.out.println("===== drop channelReadComplete: " + this.remoteAddress);
         // Don't notify the next handler and increment counter
         numDpLbCallsBlocked.incrementAndGet();
       } else if (dropDpBackendCall) {
+	System.out.println("===== drop channelReadComplete: " + this.remoteAddress);
         numDpBackendCallsBlocked.incrementAndGet();
       } else {
+	System.out.println("===== pass channelReadComplete: " + this.remoteAddress);
         if (isDpAddr) {
           numDpCallsRead.incrementAndGet();
         }
