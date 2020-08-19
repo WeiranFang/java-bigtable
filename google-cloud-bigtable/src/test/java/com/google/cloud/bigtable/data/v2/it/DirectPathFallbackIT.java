@@ -77,12 +77,12 @@ public class DirectPathFallbackIT {
 
   @ClassRule public static TestEnvRule testEnvRule = new TestEnvRule();
 
-  private AtomicBoolean failDpLbConnection = new AtomicBoolean();
-  private AtomicInteger numDpLbConnectionFailed = new AtomicInteger();
+  private AtomicBoolean dropDpLbCalls = new AtomicBoolean();
+  private AtomicInteger numDpLbCallsBlocked = new AtomicInteger();
   //private AtomicInteger numDpLbAddrRead = new AtomicInteger();
 
-  private AtomicBoolean failDpBackendConnection = new AtomicBoolean();
-  private AtomicInteger numDpBackendConnectionFailed = new AtomicInteger();
+  private AtomicBoolean dropDpBackendCalls = new AtomicBoolean();
+  private AtomicInteger numDpBackendCallsBlocked = new AtomicInteger();
   //private AtomicInteger numDpBackendAddrRead = new AtomicInteger();
 
   private AtomicBoolean dropDpCalls = new AtomicBoolean();
@@ -161,7 +161,9 @@ public class DirectPathFallbackIT {
         .isTrue();
 
     // Drop any future DirectPath calls on existing channel.
-    dropDpCalls.set(true);
+    //dropDpCalls.set(true);
+    dropDpLbCalls.set(true);
+    dropDpBackendCalls.set(true);
 
     // New requests should be routed over IPv4 and CFE.
     instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
@@ -174,7 +176,9 @@ public class DirectPathFallbackIT {
 
     // Make sure that the client will start reading from DirectPath again by sending new requests
     // and checking the injected DirectPath counter has been updated.
-    dropDpCalls.set(false);
+    //dropDpCalls.set(false);
+    dropDpLbCalls.set(false);
+    dropDpBackendCalls.set(false);
 
     assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
@@ -183,7 +187,7 @@ public class DirectPathFallbackIT {
   public void testFallbackAtBalancerConnection()
       throws InterruptedException, TimeoutException, IOException {
     // Set connections to DirectPath grpcLB to fail.
-    failDpLbConnection.set(true);
+    dropDpLbCalls.set(true);
 
     // New connections should fallback to use IPv4 and CFE.
     instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
@@ -191,12 +195,12 @@ public class DirectPathFallbackIT {
     // Verify that the above check was meaningful, by verifying that the grpcLB connection
     // actually failed.
     assertWithMessage("Failed to detect any LB packets got dropped")
-        .that(numDpLbConnectionFailed.get())
+        .that(numDpLbCallsBlocked.get())
         .isGreaterThan(0);
 
     // Make sure that new connections will use DirectPath again by creating new client with read
     // request and checking the injected DirectPath counter has been updated.
-    failDpLbConnection.set(false);
+    dropDpLbCalls.set(false);
 
     //assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
@@ -205,7 +209,7 @@ public class DirectPathFallbackIT {
   public void testFallbackAtBackendConnection()
       throws InterruptedException, TimeoutException, IOException {
     // Set connections to DirectPath backend to fail.
-    failDpBackendConnection.set(true);
+    dropDpBackendCalls.set(true);
 
     // New connections should fallback to use IPv4 and CFE.
     instrumentedClient.readRow(testEnvRule.env().getTableId(), "nonexistent-row");
@@ -213,12 +217,12 @@ public class DirectPathFallbackIT {
     // Verify that the above check was meaningful, by verifying that the grpcLB connection
     // actually failed.
     assertWithMessage("Failed to detect any LB packets got dropped")
-        .that(numDpBackendConnectionFailed.get())
+        .that(numDpBackendCallsBlocked.get())
         .isGreaterThan(0);
 
     // Make sure that new connections will use DirectPath again by creating new client with read
     // request and checking the injected DirectPath counter has been updated.
-    failDpBackendConnection.set(false);
+    dropDpBackendCalls.set(false);
 
     //assertWithMessage("Failed to upgrade back to DirectPath").that(exerciseDirectPath()).isTrue();
   }
@@ -306,29 +310,35 @@ public class DirectPathFallbackIT {
         }
       }
 
-      boolean failConnection = (isDpLbAddr && failDpLbConnection.get())
-          || (isDpBackendAddr && failDpBackendConnection.get());
+      //boolean failConnection = (isDpLbAddr && failDpLbConnection.get())
+      //    || (isDpBackendAddr && failDpBackendConnection.get());
 
-      if (failConnection) {
-        // Fail the connection fast
-        if (isDpLbAddr) {
-          numDpLbConnectionFailed.incrementAndGet();
-        }
-        if (isDpBackendAddr) {
-          numDpBackendConnectionFailed.incrementAndGet();
-        }
-        promise.setFailure(new IOException("fake error"));
-      } else {
-        super.connect(ctx, remoteAddress, localAddress, promise);
-      }
+      //if (failConnection) {
+      //  // Fail the connection fast
+      //  if (isDpLbAddr) {
+      //    numDpLbConnectionFailed.incrementAndGet();
+      //  }
+      //  if (isDpBackendAddr) {
+      //    numDpBackendConnectionFailed.incrementAndGet();
+      //  }
+      //  promise.setFailure(new IOException("fake error"));
+      //} else {
+      //  super.connect(ctx, remoteAddress, localAddress, promise);
+      //}
+      super.connect(ctx, remoteAddress, localAddress, promise);
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-      boolean dropCall = isDpAddr && dropDpCalls.get();
-      if (dropCall) {
+      boolean dropDpLbCall = isDpLbAddr && dropDpLbCalls.get();
+      boolean dropDpBackendCall = isDpBackendAddr && dropDpBackendCalls.get();
+      //boolean dropCall = isDpAddr && dropDpCalls.get();
+      if (dropDpLbCall) {
         // Don't notify the next handler and increment counter
-        numDpCallsBlocked.incrementAndGet();
+        numDpLbCallsBlocked.incrementAndGet();
+        ReferenceCountUtil.release(msg);
+      } else if (dropDpBackendCall) {
+        numDpBackendCallsBlocked.incrementAndGet();
         ReferenceCountUtil.release(msg);
       } else {
         super.channelRead(ctx, msg);
@@ -337,11 +347,15 @@ public class DirectPathFallbackIT {
 
     @Override
     public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
-      boolean dropCall = isDpAddr && dropDpCalls.get();
+      boolean dropDpLbCall = isDpLbAddr && dropDpLbCalls.get();
+      boolean dropDpBackendCall = isDpBackendAddr && dropDpBackendCalls.get();
+      //boolean dropCall = isDpAddr && dropDpCalls.get();
 
-      if (dropCall) {
+      if (dropDpLbCall) {
         // Don't notify the next handler and increment counter
-        numDpCallsBlocked.incrementAndGet();
+        numDpLbCallsBlocked.incrementAndGet();
+      } else if (dropDpBackendCall) {
+        numDpBackendCallsBlocked.incrementAndGet();
       } else {
         if (isDpAddr) {
           numDpCallsRead.incrementAndGet();
