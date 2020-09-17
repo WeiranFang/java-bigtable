@@ -43,6 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Before;
 import org.junit.ClassRule;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -58,6 +59,7 @@ public class ReadIT {
     prefix = UUID.randomUUID().toString();
   }
 
+  @Ignore
   @Test
   public void isRowExists() throws Exception {
     String rowKey = prefix + "-test-row-key";
@@ -78,6 +80,7 @@ public class ReadIT {
     assertThat(testEnvRule.env().getDataClient().existsAsync(tableId, rowKey).get()).isTrue();
   }
 
+  @Ignore
   @Test
   public void readEmpty() throws Throwable {
     String uniqueKey = prefix + "-readEmpty";
@@ -85,10 +88,11 @@ public class ReadIT {
     Query query = Query.create(testEnvRule.env().getTableId()).rowKey(uniqueKey);
 
     // Sync
-    ArrayList<Row> rows = Lists.newArrayList(testEnvRule.env().getDataClient().readRows(query));
-    assertThat(rows).isEmpty();
+    //ArrayList<Row> rows = Lists.newArrayList(testEnvRule.env().getDataClient().readRows(query));
+    //assertThat(rows).isEmpty();
 
     // Async
+    System.out.println("======= start async call");
     AccumulatingObserver observer = new AccumulatingObserver();
     testEnvRule.env().getDataClient().readRowsAsync(query, observer);
     observer.awaitCompletion();
@@ -129,29 +133,35 @@ public class ReadIT {
     // Sync
     Query query = Query.create(tableId).range(uniqueKey + "-0", uniqueKey + "-" + numRows);
     ServerStream<Row> serverStream = testEnvRule.env().getDataClient().readRows(query);
-    Thread.sleep(10000);
-    ArrayList<Row> actualResults =
-        Lists.newArrayList(serverStream);
+    for (Row row : serverStream) {
+      Thread.sleep(10000);
+      System.out.println("========= row: " + row.toString());
+    }
+    //Thread.sleep(10000);
 
-    assertThat(actualResults).containsExactlyElementsIn(expectedRows);
+    //ArrayList<Row> actualResults =
+    //    Lists.newArrayList(serverStream);
 
-    // Async
-    AccumulatingObserver observer = new AccumulatingObserver();
-    testEnvRule.env().getDataClient().readRowsAsync(query, observer);
-    observer.awaitCompletion();
-    assertThat(observer.responses).containsExactlyElementsIn(expectedRows);
+    //assertThat(actualResults).containsExactlyElementsIn(expectedRows);
 
-    // Point Sync
-    Row actualRow =
-        testEnvRule.env().getDataClient().readRow(tableId, expectedRows.get(0).getKey());
-    assertThat(actualRow).isEqualTo(expectedRows.get(0));
+    //// Async
+    //AccumulatingObserver observer = new AccumulatingObserver();
+    //testEnvRule.env().getDataClient().readRowsAsync(query, observer);
+    //observer.awaitCompletion();
+    //assertThat(observer.responses).containsExactlyElementsIn(expectedRows);
 
-    // Point Async
-    ApiFuture<Row> actualRowFuture =
-        testEnvRule.env().getDataClient().readRowAsync(tableId, expectedRows.get(0).getKey());
-    assertThat(actualRowFuture.get()).isEqualTo(expectedRows.get(0));
+    //// Point Sync
+    //Row actualRow =
+    //    testEnvRule.env().getDataClient().readRow(tableId, expectedRows.get(0).getKey());
+    //assertThat(actualRow).isEqualTo(expectedRows.get(0));
+
+    //// Point Async
+    //ApiFuture<Row> actualRowFuture =
+    //    testEnvRule.env().getDataClient().readRowAsync(tableId, expectedRows.get(0).getKey());
+    //assertThat(actualRowFuture.get()).isEqualTo(expectedRows.get(0));
   }
 
+  @Ignore
   @Test
   public void readSingleNonexistentAsyncCallback() throws Exception {
     ApiFuture<Row> future =
@@ -202,20 +212,35 @@ public class ReadIT {
     }
 
     @Override
-    public void onStart(StreamController controller) {}
+    public void onStart(StreamController controller) {
+      try {
+        Thread.sleep(10000);
+      } catch (InterruptedException e) {
+        e.printStackTrace();
+      }
+      System.out.println("======== onStart");
+    }
 
     @Override
     public void onResponse(Row row) {
+      try {
+        Thread.sleep(10000);
+      } catch (InterruptedException e) {
+        e.printStackTrace();
+      }
+      System.out.println("========= onResponse");
       responses.add(row);
     }
 
     @Override
     public void onError(Throwable t) {
+      System.out.println("========= onError");
       completionFuture.setException(t);
     }
 
     @Override
     public void onComplete() {
+      System.out.println("========= onComplete");
       completionFuture.set(null);
     }
   }
