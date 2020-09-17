@@ -208,6 +208,17 @@ class CloudEnv extends AbstractTestEnv {
         final ClientCall<ReqT, RespT> clientCall = next.newCall(method, callOptions);
         return new SimpleForwardingClientCall<ReqT, RespT>(clientCall) {
           @Override
+          public void sendMessage(ReqT message) {
+            System.out.println("================= sendMessage");
+            try {
+              Thread.sleep(10000);
+            } catch (InterruptedException e) {
+              e.printStackTrace();
+            }
+            super.sendMessage(message);
+          }
+
+          @Override
           public void start(Listener<RespT> responseListener, Metadata headers) {
             super.start(
                 new SimpleForwardingClientCallListener<RespT>(responseListener) {

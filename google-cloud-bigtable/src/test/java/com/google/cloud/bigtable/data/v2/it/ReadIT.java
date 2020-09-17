@@ -134,7 +134,7 @@ public class ReadIT {
     Query query = Query.create(tableId).range(uniqueKey + "-0", uniqueKey + "-" + numRows);
     ServerStream<Row> serverStream = testEnvRule.env().getDataClient().readRows(query);
     for (Row row : serverStream) {
-      Thread.sleep(10000);
+      //Thread.sleep(10000);
       System.out.println("========= row: " + row.toString());
     }
     //Thread.sleep(10000);
