@@ -213,11 +213,6 @@ class CloudEnv extends AbstractTestEnv {
           @Override
           public void sendMessage(ReqT message) {
             LOGGER.info("================= sendMessage");
-            try {
-              Thread.sleep(10000);
-            } catch (InterruptedException e) {
-              e.printStackTrace();
-            }
             super.sendMessage(message);
           }
 
@@ -228,6 +223,12 @@ class CloudEnv extends AbstractTestEnv {
                   @Override
                   public void onHeaders(Metadata headers) {
                     LOGGER.info("============= onHeader");
+                    LOGGER.info("============= sleep 10s");
+                    try {
+                      Thread.sleep(10000);
+                    } catch (InterruptedException e) {
+                      e.printStackTrace();
+                    }
                     // Check peer IP after connection is established.
                     SocketAddress remoteAddr =
                         clientCall.getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
@@ -247,11 +248,6 @@ class CloudEnv extends AbstractTestEnv {
                   @Override
                   public void onClose(Status status, Metadata trailers) {
                     LOGGER.info("================= onClose");
-                    try {
-                      Thread.sleep(10000);
-                    } catch (InterruptedException e) {
-                      e.printStackTrace();
-                    }
                     super.onClose(status, trailers);
                   }
                 },
