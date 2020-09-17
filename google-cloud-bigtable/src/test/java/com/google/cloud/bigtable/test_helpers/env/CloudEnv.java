@@ -36,6 +36,7 @@ import io.grpc.Grpc;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
+import io.grpc.Status;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -227,6 +228,12 @@ class CloudEnv extends AbstractTestEnv {
                     }
                     super.onHeaders(headers);
                   }
+
+                  @Override
+                  public void onClose(Status status, Metadata trailers) {
+                    System.out.println("================= onClose");
+                    super.onClose(status, trailers);
+                  }
                 },
                 headers);
           }
@@ -239,12 +246,13 @@ class CloudEnv extends AbstractTestEnv {
     if (remoteAddr instanceof InetSocketAddress) {
       InetAddress inetAddress = ((InetSocketAddress) remoteAddr).getAddress();
       String addr = inetAddress.getHostAddress();
-      if (isDirectPathIpv4Only()) {
-        return addr.startsWith(DP_IPV4_PREFIX);
-      } else {
-        // For an ipv6-enabled VM, client could connect to either ipv4 or ipv6 balancer addresses.
-        return addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX);
-      }
+      System.out.println("============= remote addr: " + addr);
+      //if (isDirectPathIpv4Only()) {
+      //  return addr.startsWith(DP_IPV4_PREFIX);
+      //} else {
+      //  // For an ipv6-enabled VM, client could connect to either ipv4 or ipv6 balancer addresses.
+      //  return addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX);
+      //}
     }
     return true;
   }

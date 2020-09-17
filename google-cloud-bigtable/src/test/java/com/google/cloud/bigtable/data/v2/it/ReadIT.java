@@ -22,6 +22,7 @@ import com.google.api.core.ApiFutureCallback;
 import com.google.api.core.ApiFutures;
 import com.google.api.core.SettableApiFuture;
 import com.google.api.gax.rpc.ResponseObserver;
+import com.google.api.gax.rpc.ServerStream;
 import com.google.api.gax.rpc.StreamController;
 import com.google.cloud.bigtable.data.v2.models.Query;
 import com.google.cloud.bigtable.data.v2.models.Row;
@@ -127,8 +128,10 @@ public class ReadIT {
 
     // Sync
     Query query = Query.create(tableId).range(uniqueKey + "-0", uniqueKey + "-" + numRows);
+    ServerStream<Row> serverStream = testEnvRule.env().getDataClient().readRows(query);
+    Thread.sleep(10000);
     ArrayList<Row> actualResults =
-        Lists.newArrayList(testEnvRule.env().getDataClient().readRows(query));
+        Lists.newArrayList(serverStream);
 
     assertThat(actualResults).containsExactlyElementsIn(expectedRows);
 
