@@ -223,24 +223,15 @@ class CloudEnv extends AbstractTestEnv {
                   @Override
                   public void onHeaders(Metadata headers) {
                     LOGGER.info("============= onHeader");
+                    // Check peer IP after connection is established.
+                    SocketAddress remoteAddr =
+                        clientCall.getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
+                    LOGGER.info("============= remote addr: " + remoteAddr);
                     LOGGER.info("============= sleep 10s");
                     try {
                       Thread.sleep(10000);
                     } catch (InterruptedException e) {
                       e.printStackTrace();
-                    }
-                    // Check peer IP after connection is established.
-                    SocketAddress remoteAddr =
-                        clientCall.getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
-                    if (!verifyRemoteAddress(remoteAddr)) {
-                      throw new RuntimeException(
-                          String.format(
-                              "Synthetically aborting the current request because it did not adhere"
-                                  + " to the test environment's requirement for DirectPath."
-                                  + " Expected test to access DirectPath via %s,"
-                                  + " but RPC was destined for %s",
-                              isDirectPathIpv4Only() ? "ipv4 only" : "ipv4 or ipv6",
-                              remoteAddr.toString()));
                     }
                     super.onHeaders(headers);
                   }
@@ -262,13 +253,12 @@ class CloudEnv extends AbstractTestEnv {
     if (remoteAddr instanceof InetSocketAddress) {
       InetAddress inetAddress = ((InetSocketAddress) remoteAddr).getAddress();
       String addr = inetAddress.getHostAddress();
-      LOGGER.info("============= remote addr: " + addr);
-      //if (isDirectPathIpv4Only()) {
-      //  return addr.startsWith(DP_IPV4_PREFIX);
-      //} else {
-      //  // For an ipv6-enabled VM, client could connect to either ipv4 or ipv6 balancer addresses.
-      //  return addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX);
-      //}
+      if (isDirectPathIpv4Only()) {
+        return addr.startsWith(DP_IPV4_PREFIX);
+      } else {
+        // For an ipv6-enabled VM, client could connect to either ipv4 or ipv6 balancer addresses.
+        return addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX);
+      }
     }
     return true;
   }
