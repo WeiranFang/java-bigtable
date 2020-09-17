@@ -100,6 +100,20 @@ public class ReadIT {
   }
 
   @Test
+  public void testManualACL() {
+    String tableId = testEnvRule.env().getTableId();
+
+    // Sync
+    Query query = Query.create(tableId).range("r1", "r6");
+    ServerStream<Row> serverStream = testEnvRule.env().getDataClient().readRows(query);
+    for (Row row : serverStream) {
+      //Thread.sleep(10000);
+      System.out.println("========= row: " + row.toString());
+    }
+  }
+
+  @Ignore
+  @Test
   public void read() throws Throwable {
     int numRows = 5;
     List<Row> expectedRows = Lists.newArrayList();
