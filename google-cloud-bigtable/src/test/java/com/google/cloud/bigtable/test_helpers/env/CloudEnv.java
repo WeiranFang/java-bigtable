@@ -24,6 +24,7 @@ import com.google.cloud.bigtable.admin.v2.BigtableTableAdminClient;
 import com.google.cloud.bigtable.admin.v2.BigtableTableAdminSettings;
 import com.google.cloud.bigtable.data.v2.BigtableDataClient;
 import com.google.cloud.bigtable.data.v2.BigtableDataSettings;
+import com.google.cloud.bigtable.data.v2.it.ReadIT;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Strings;
 import io.grpc.CallOptions;
@@ -41,6 +42,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
 /**
@@ -54,6 +56,7 @@ import javax.annotation.Nullable;
  * </ul>
  */
 class CloudEnv extends AbstractTestEnv {
+  private static final Logger LOGGER = Logger.getLogger(CloudEnv.class.getName());
   // IP address prefixes allocated for DirectPath backends.
   public static final String DP_IPV6_PREFIX = "2001:4860:8040";
   public static final String DP_IPV4_PREFIX = "34.126";
@@ -209,7 +212,7 @@ class CloudEnv extends AbstractTestEnv {
         return new SimpleForwardingClientCall<ReqT, RespT>(clientCall) {
           @Override
           public void sendMessage(ReqT message) {
-            System.out.println("================= sendMessage");
+            LOGGER.info("================= sendMessage");
             try {
               Thread.sleep(10000);
             } catch (InterruptedException e) {
@@ -224,6 +227,7 @@ class CloudEnv extends AbstractTestEnv {
                 new SimpleForwardingClientCallListener<RespT>(responseListener) {
                   @Override
                   public void onHeaders(Metadata headers) {
+                    LOGGER.info("============= onHeader");
                     // Check peer IP after connection is established.
                     SocketAddress remoteAddr =
                         clientCall.getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
@@ -242,7 +246,12 @@ class CloudEnv extends AbstractTestEnv {
 
                   @Override
                   public void onClose(Status status, Metadata trailers) {
-                    System.out.println("================= onClose");
+                    LOGGER.info("================= onClose");
+                    try {
+                      Thread.sleep(10000);
+                    } catch (InterruptedException e) {
+                      e.printStackTrace();
+                    }
                     super.onClose(status, trailers);
                   }
                 },
@@ -257,7 +266,7 @@ class CloudEnv extends AbstractTestEnv {
     if (remoteAddr instanceof InetSocketAddress) {
       InetAddress inetAddress = ((InetSocketAddress) remoteAddr).getAddress();
       String addr = inetAddress.getHostAddress();
-      System.out.println("============= remote addr: " + addr);
+      LOGGER.info("============= remote addr: " + addr);
       //if (isDirectPathIpv4Only()) {
       //  return addr.startsWith(DP_IPV4_PREFIX);
       //} else {
