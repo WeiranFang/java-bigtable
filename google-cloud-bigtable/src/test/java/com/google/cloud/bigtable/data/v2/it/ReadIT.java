@@ -24,6 +24,7 @@ import com.google.api.core.SettableApiFuture;
 import com.google.api.gax.rpc.ResponseObserver;
 import com.google.api.gax.rpc.ServerStream;
 import com.google.api.gax.rpc.StreamController;
+import com.google.cloud.bigtable.admin.v2.it.BigtableBackupIT;
 import com.google.cloud.bigtable.data.v2.models.Query;
 import com.google.cloud.bigtable.data.v2.models.Row;
 import com.google.cloud.bigtable.data.v2.models.RowCell;
@@ -34,6 +35,7 @@ import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -41,6 +43,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Logger;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Ignore;
@@ -50,6 +53,8 @@ import org.junit.runners.JUnit4;
 
 @RunWith(JUnit4.class)
 public class ReadIT {
+  private static final Logger LOGGER = Logger.getLogger(ReadIT.class.getName());
+
   private String prefix;
 
   @ClassRule public static TestEnvRule testEnvRule = new TestEnvRule();
@@ -108,7 +113,7 @@ public class ReadIT {
     ServerStream<Row> serverStream = testEnvRule.env().getDataClient().readRows(query);
     for (Row row : serverStream) {
       //Thread.sleep(10000);
-      System.out.println("========= row: " + row.toString());
+      LOGGER.info("============= row: " + row.toString());
     }
   }
 
