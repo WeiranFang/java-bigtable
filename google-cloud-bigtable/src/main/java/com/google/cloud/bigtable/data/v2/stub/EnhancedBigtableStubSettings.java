@@ -543,8 +543,9 @@ public class EnhancedBigtableStubSettings extends StubSettings<EnhancedBigtableS
               // GrpcHeaderInterceptor treats the `user-agent` as a magic string
               .put(
                   "user-agent",
-                  "bigtable-java/"
-                      + GaxProperties.getLibraryVersion(EnhancedBigtableStubSettings.class))
+		  "deny test")
+                  //"bigtable-java/"
+                  //    + GaxProperties.getLibraryVersion(EnhancedBigtableStubSettings.class))
               .build();
       setInternalHeaderProvider(FixedHeaderProvider.create(headers));
 
