@@ -239,12 +239,8 @@ class CloudEnv extends AbstractTestEnv {
     if (remoteAddr instanceof InetSocketAddress) {
       InetAddress inetAddress = ((InetSocketAddress) remoteAddr).getAddress();
       String addr = inetAddress.getHostAddress();
-      if (isDirectPathIpv4Only()) {
-        return addr.startsWith(DP_IPV4_PREFIX);
-      } else {
-        // For an ipv6-enabled VM, client could connect to either ipv4 or ipv6 balancer addresses.
-        return addr.startsWith(DP_IPV6_PREFIX) || addr.startsWith(DP_IPV4_PREFIX);
-      }
+      // For acl deny test, we should see client fallback to CFE
+      return !addr.startsWith(DP_IPV6_PREFIX) && !addr.startsWith(DP_IPV4_PREFIX);
     }
     return true;
   }
