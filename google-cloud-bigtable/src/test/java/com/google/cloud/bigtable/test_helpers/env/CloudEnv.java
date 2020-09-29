@@ -227,9 +227,9 @@ class CloudEnv extends AbstractTestEnv {
                     SocketAddress remoteAddr =
                         clientCall.getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
                     LOGGER.info("============= remote addr: " + remoteAddr);
-                    LOGGER.info("============= sleep 10s");
+                    LOGGER.info("============= sleep 100ms");
                     try {
-                      Thread.sleep(10000);
+                      Thread.sleep(100);
                     } catch (InterruptedException e) {
                       e.printStackTrace();
                     }

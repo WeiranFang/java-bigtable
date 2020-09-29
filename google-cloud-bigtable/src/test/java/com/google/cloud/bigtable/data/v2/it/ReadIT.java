@@ -50,6 +50,7 @@ import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import com.google.cloud.bigtable.data.v2.BigtableDataClient;
 
 @RunWith(JUnit4.class)
 public class ReadIT {
@@ -108,12 +109,19 @@ public class ReadIT {
   public void testManualACL() {
     String tableId = testEnvRule.env().getTableId();
 
-    // Sync
     Query query = Query.create(tableId).range("r1", "r6");
-    ServerStream<Row> serverStream = testEnvRule.env().getDataClient().readRows(query);
-    for (Row row : serverStream) {
-      //Thread.sleep(10000);
-      LOGGER.info("============= row: " + row.toString());
+    for (int i = 0; i <= 50000; i++) {
+      try {
+        BigtableDataClient bdc = testEnvRule.env().getDataClient();
+        ServerStream<Row> serverStream = bdc.readRows(query);
+        for (Row row : serverStream) {
+          //Thread.sleep(10000);
+          LOGGER.info("============= row: " + row.toString());
+        }
+      } catch (Exception e) {
+        LOGGER.severe("Request failed: " + e);
+        e.printStackTrace();
+      }
     }
   }
 
