@@ -26,7 +26,17 @@ import com.google.cloud.bigtable.data.v2.BigtableDataClient;
 import com.google.cloud.bigtable.data.v2.BigtableDataSettings;
 import com.google.cloud.bigtable.test_helpers.env.TestEnvRule;
 import com.google.common.base.Stopwatch;
+import io.grpc.CallOptions;
+import io.grpc.Channel;
+import io.grpc.ClientCall;
+import io.grpc.ClientInterceptor;
+import io.grpc.ForwardingClientCall.SimpleForwardingClientCall;
+import io.grpc.ForwardingClientCallListener.SimpleForwardingClientCallListener;
+import io.grpc.Grpc;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
+import io.grpc.Status;
 import io.grpc.alts.ComputeEngineChannelBuilder;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.channel.ChannelDuplexHandler;
@@ -46,6 +56,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Logger;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.ClassRule;
@@ -62,6 +73,7 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class DirectPathFallbackIT {
+  private Logger LOGGER = Logger.getLogger(DirectPathFallbackIT.class.getName());
   // A threshold of completed read calls to observe to ascertain IPv6 is working.
   // This was determined experimentally to account for both gRPC-LB RPCs and Bigtable api RPCs.
   private static final int MIN_COMPLETE_READ_CALLS = 40;
@@ -108,6 +120,7 @@ public class DirectPathFallbackIT {
                   @Override
                   public ManagedChannelBuilder apply(ManagedChannelBuilder builder) {
                     injectNettyChannelHandler(builder);
+                    builder.intercept(new RemoteAddressDebuggingInterceptor());
 
                     // Fail fast when blackhole is active
                     builder.keepAliveTime(1, TimeUnit.SECONDS);
@@ -212,6 +225,32 @@ public class DirectPathFallbackIT {
       channel.pipeline().addLast(new MyChannelHandler());
 
       return channel;
+    }
+  }
+
+  final class RemoteAddressDebuggingInterceptor implements ClientInterceptor {
+
+    @Override
+    public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(MethodDescriptor<ReqT, RespT> method,
+        CallOptions callOptions, Channel next) {
+      final ClientCall<ReqT, RespT> newCall = next.newCall(method, callOptions);
+      return new SimpleForwardingClientCall<ReqT, RespT>(newCall) {
+        @Override
+        public void start(Listener<RespT> responseListener, Metadata headers) {
+          super.start(new SimpleForwardingClientCallListener<RespT>(responseListener) {
+            @Override
+            public void onClose(Status status, Metadata trailers) {
+              if (!status.isOk()) {
+                LOGGER.info("========================= status: " + status);
+                SocketAddress remoteAddr =
+                    newCall.getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
+                status = status.augmentDescription("Remote Address: " + remoteAddr.toString());
+              }
+              super.onClose(status, trailers);
+            }
+          }, headers);
+        }
+      };
     }
   }
 
