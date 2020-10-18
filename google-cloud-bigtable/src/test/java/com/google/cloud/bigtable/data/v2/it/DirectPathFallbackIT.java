@@ -120,11 +120,12 @@ public class DirectPathFallbackIT {
                   @Override
                   public ManagedChannelBuilder apply(ManagedChannelBuilder builder) {
                     injectNettyChannelHandler(builder);
-                    builder.intercept(new RemoteAddressDebuggingInterceptor());
 
                     // Fail fast when blackhole is active
                     builder.keepAliveTime(1, TimeUnit.SECONDS);
                     builder.keepAliveTimeout(1, TimeUnit.SECONDS);
+
+                    builder.intercept(new RemoteAddressDebuggingInterceptor());
                     return builder;
                   }
                 })
@@ -241,10 +242,10 @@ public class DirectPathFallbackIT {
             @Override
             public void onClose(Status status, Metadata trailers) {
               if (!status.isOk()) {
-                LOGGER.info("========================= status: " + status);
                 SocketAddress remoteAddr =
                     newCall.getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
                 status = status.augmentDescription("Remote Address: " + remoteAddr.toString());
+                LOGGER.info("========================= status: " + status);
               }
               super.onClose(status, trailers);
             }
